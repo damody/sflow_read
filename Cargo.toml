@@ -1,0 +1,35 @@
+[package]
+name = "sflow_read"
+version = "0.1.0"
+authors = ["damody <liam.huang@4ipnet.com>"]
+
+[dependencies]
+log = "*"
+env_logger = "*"
+text_io = "0.1.7"
+serde = "1.0"
+serde_json = "1.0"
+serde_derive = "1.0"
+regex = "1"
+postgres = { version = "0.15", features = ["with-time", "with-rustc-serialize", "with-serde_json", "with-chrono", "with-eui48"] }
+r2d2 = "0.8.2"
+r2d2-diesel = "1.0"
+dotenv = "0.13"
+diesel_codegen = { version = "0.16.1", features = ["mysql"] }
+mercator = "0.1"
+bytes = "0.4"
+actix = "0.7.4"
+actix-web = "0.7.8"
+futures = "0.1"
+uuid = { version = "0.5", features = ["serde", "v4"] }
+
+[dependencies.diesel]
+version = "1.3.3"
+features = ["postgres", "chrono", "r2d2"]
+
+[dependencies.chrono]
+version = "0.4"
+features = ["serde"]
+
+[profile.release]
+debug = true
