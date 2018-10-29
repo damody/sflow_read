@@ -48,6 +48,7 @@ impl Handler<flow::FlowParams> for DbExecutor {
         let conn: &PgConnection = &self.0.get().unwrap();
         let loadflow = flow
             .filter(input_date.between(up, dn))
+            .order(input_date.desc())
             .load::<models::Flow>(conn);
         if let Ok(loadflow) = loadflow {
             let fmap = build_graph_from_db(&loadflow);

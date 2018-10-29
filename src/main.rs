@@ -1,3 +1,6 @@
+#[link(name="openssl", kind="static")]
+extern crate openssl;
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 
 #[macro_use] 
 extern crate text_io;
@@ -19,9 +22,6 @@ extern crate uuid;
 extern crate bytes;
 extern crate chrono;
 extern crate r2d2_diesel;
-// use postgres sql
-extern crate postgres;
-use postgres::{Connection};
 #[macro_use]
 extern crate diesel;
 //use postgres::types::*;
@@ -54,27 +54,30 @@ fn p404(_req: &HttpRequest<AppState>) -> actix_web::Result<actix_web::fs::NamedF
 fn main() -> Result<(), Box<std::error::Error>> {
     ::std::env::set_var("RUST_LOG", "info");
     env_logger::init();
-    let sql = connect_sql();
-    let conn: Connection = if sql.is_ok() { 
-        info!("sql ok");
-        sql.unwrap()
-    } else {
-        panic!("sql error");
-    };
-    
+        
+    let sys = actix::System::new("sflow-system");
+    let manager = ConnectionManager::<PgConnection>::new(get_sql_url()?);
+    let pool = r2d2::Pool::new(manager)
+        .expect("Failed to create pool.");
+    let poolc = pool.clone();
+    let addr = SyncArbiter::start(8, move || DbExecutor(poolc.clone()));
+
+
+    let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+    builder.set_private_key_file("rootAkey.pem", SslFiletype::PEM).unwrap();
+    builder.set_certificate_chain_file("rootA.pem").unwrap();
+
+
     thread::spawn(move || {
-        match input_data(&conn) {
+        let conn: &PgConnection = &pool.clone().get().unwrap();
+        match input_data(conn) {
             Ok(_x) => {},
             Err(x) => {
                 info!("{}",x);
             }
         }
     });
-    let sys = actix::System::new("sflow-system");
-    let manager = ConnectionManager::<PgConnection>::new(get_sql_url()?);
-    let pool = r2d2::Pool::new(manager)
-        .expect("Failed to create pool.");
-    let addr = SyncArbiter::start(8, move || DbExecutor(pool.clone()));
+
     // Start http server
     server::new(move || {
         App::with_state(AppState{db: addr.clone()})
@@ -82,12 +85,15 @@ fn main() -> Result<(), Box<std::error::Error>> {
             .middleware(middleware::Logger::default())
             .configure(|app| {
                 Cors::for_app(app)
-                    .allowed_origin("http://localhost:4200")
+                    .allowed_origin("https://10.71.5.59")
                     .allowed_methods(vec!["GET", "POST", "DELETE", "PUT"])
                     .allowed_headers(vec![header::AUTHORIZATION, header::ACCEPT])
                     .allowed_header(header::CONTENT_TYPE)
                     .max_age(3600)
                     .resource("/flow", |r| {
+                        r.post().with(flow_post);
+                    })
+                    .resource("/sflow", |r| {
                         r.post().with(flow_post);
                     })
                     .register()
@@ -99,9 +105,11 @@ fn main() -> Result<(), Box<std::error::Error>> {
                     r.route().filter(pred::Not(pred::Get())).f(
                         |_req| HttpResponse::MethodNotAllowed());
                 })
-    }).workers(8).bind("127.0.0.1:8080")
+    }).workers(8)
+        .bind_ssl("10.73.16.244:8080", builder)
         .unwrap()
         .start();
     let _ = sys.run();
+
     Ok(())
 }

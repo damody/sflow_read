@@ -1,10 +1,12 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::str;
 use std::io;
 use std;
 use regex::Regex;
-use postgres::{Connection, TlsMode};
+use diesel::pg::PgConnection;
+use diesel::sql_query;
+use diesel::query_dsl::*;
 use dotenv;
 use models;
 
@@ -55,7 +57,7 @@ pub struct FlowDirection {
     pub ntype: String,
     pub size: i32,
 }
-type FlowMap = HashMap<String, FlowDirection>;
+type FlowMap = BTreeMap<String, FlowDirection>;
 
 #[allow(non_snake_case)]
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -112,7 +114,7 @@ pub fn filter_ff_mac(fm: &mut FlowMap) {
 }
 
 pub fn build_d3_data(fm: &FlowMap) -> Result<(Vec<FlowName>, Vec<FlowDirection2>), Box<std::error::Error>> {
-    let mut pointset: HashSet<String> = HashSet::new();
+    let mut pointset: BTreeSet<String> = BTreeSet::new();
     for fd in fm.iter() {
         pointset.insert(fd.1.source.clone());
         pointset.insert(fd.1.target.clone());
@@ -123,13 +125,13 @@ pub fn build_d3_data(fm: &FlowMap) -> Result<(Vec<FlowName>, Vec<FlowDirection2>
         points.push(FlowName {nodeId: count, name:fd.clone() });
         count += 1;
     }
-    let mut pmap: HashMap<String, i32> = HashMap::new();
+    let mut pmap: BTreeMap<String, i32> = BTreeMap::new();
     for p in points.iter() {
         pmap.insert(p.name.clone(), p.nodeId);
     }
     let mut fmap: Vec<FlowDirection2> = vec![];
     for fd in fm.iter() {
-        if fd.1.source != fd.1.target {
+        if fd.1.source != fd.1.target && fd.1.source != "0.0.0.0" && fd.1.target != "0.0.0.0" {
             fmap.push(FlowDirection2 {
                 source: *pmap.get(&fd.1.source).unwrap(),
                 target: *pmap.get(&fd.1.target).unwrap(),
@@ -228,8 +230,8 @@ pub fn build_graph(data: &Vec<Datagram>) -> Result<FlowMap, Box<std::error::Erro
                             size: size * s.meanSkipCount
                         });
                     },
-                    Some(ref mut s) => {
-                        s.size += size;
+                    Some(ref mut x) => {
+                        x.size += size * s.meanSkipCount;
                     }
                 }
                 if fd.is_some() {
@@ -248,7 +250,6 @@ pub fn read_sample_v5(s: &mut SampleV5) -> Result<(), Box<std::error::Error>> {
     loop {
         let mut input = String::new();
         io::stdin().read_line(&mut input).expect("failed to read from pipe");
-        //print!("{}", input);
         if let Some(_) = input.find("srcMAC ") {
             let srcMAC:String;
             try_scan!(input.bytes() => "srcMAC {}", srcMAC);
@@ -310,7 +311,6 @@ pub fn read_datagram(dg: &mut Datagram) -> Result<(), Box<std::error::Error>> {
     loop {
         let mut input = String::new();
         io::stdin().read_line(&mut input).expect("failed to read from pipe");
-        
         if let Some(_) = input.find("agent ") {
             try_scan!(input.bytes() => "agent {}", dg.agent);
         } else if let Some(_) = input.find("datagramSourceIP ") {
@@ -341,13 +341,7 @@ pub fn get_sql_url() -> Result<String, Box<std::error::Error>> {
     Ok(url)
 }
 
-pub fn connect_sql() -> Result<Connection, Box<std::error::Error>> {
-    let url = get_sql_url()?;
-    let conn = Connection::connect(url, TlsMode::None)?;
-    Ok(conn)
-}
-
-pub fn input_data(conn: &Connection) -> Result<(), Box<std::error::Error>> {
+pub fn input_data(conn: &PgConnection) -> Result<(), Box<std::error::Error>> {
     let mut data: Vec<Datagram> = vec![];
     let mut input = String::new();
     loop {
@@ -367,18 +361,9 @@ pub fn input_data(conn: &Connection) -> Result<(), Box<std::error::Error>> {
                         v.agent, v.utc, v.source, v.target, v.srcport, v.dstport, v.ntype, v.size));
                 }
                 multi_data.pop();
-                match conn.execute(multi_data.as_str(), &[]) {
-                    Ok(_)=>(),
-                    Err(x)=> {
-                        println!("SQL ERROR:\n{} \n{}", multi_data, x);
-                        ()
-                    }
-                }
-                //let (nodes_data, links_data) = build_d3_json(&fm)?;
-                //println!("{}\n{}", nodes_data, links_data);
+                sql_query(multi_data).execute(conn)?;
             }
         };
         data.clear();
     }
-    //Ok(())
 }
